@@ -4,11 +4,11 @@ from io import BytesIO
 from unittest.mock import MagicMock, patch
 
 import pytest
+from asgiref.testing import ApplicationCommunicator
 from django.core.exceptions import RequestDataTooBig
 from django.http import HttpResponse, RawPostDataException
 from django.test import override_settings
 
-from asgiref.testing import ApplicationCommunicator
 from channels.consumer import AsyncConsumer
 from channels.db import database_sync_to_async
 from channels.http import AsgiHandler, AsgiRequest
@@ -129,7 +129,7 @@ class RequestTests(unittest.TestCase):
                 "path": "/test/",
                 "headers": {
                     "content-type": b"multipart/form-data; boundary=BOUNDARY",
-                    "content-length": str(len(body)).encode("ascii"),
+                    "content-length": str(len(body)).encode("latin1"),
                 },
             },
             BytesIO(body),
@@ -226,7 +226,7 @@ class RequestTests(unittest.TestCase):
             "path": "/test/",
             "headers": {
                 "content-type": b"multipart/form-data; boundary=BOUNDARY",
-                "content-length": str(len(body)).encode("ascii"),
+                "content-length": str(len(body)).encode("latin1"),
             },
         }
 
@@ -240,8 +240,24 @@ class RequestTests(unittest.TestCase):
             # account the size of the file upload data.
             AsgiRequest(scope, BytesIO(body)).POST
 
+    def test_latin1_headers(self):
+        request = AsgiRequest(
+            {
+                "http_version": "1.1",
+                "method": "GET",
+                "path": "/test2/",
+                "headers": {
+                    "host": b"example.com",
+                    "foo": bytes("äbcd", encoding="latin1"),
+                },
+            },
+            BytesIO(b""),
+        )
 
-### Handler tests
+        self.assertEqual(request.headers["foo"], "äbcd")
+
+
+# Handler tests
 
 
 class MockHandler(AsgiHandler):
@@ -256,13 +272,15 @@ class MockHandler(AsgiHandler):
         return HttpResponse("fake")
 
 
+@pytest.mark.django_db
 @pytest.mark.asyncio
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
 async def test_handler_basic():
     """
     Tests very basic request handling, no body.
     """
     scope = {"type": "http", "http_version": "1.1", "method": "GET", "path": "/test/"}
-    handler = ApplicationCommunicator(MockHandler, scope)
+    handler = ApplicationCommunicator(MockHandler(), scope)
     await handler.send_input({"type": "http.request"})
     await handler.receive_output(1)  # response start
     await handler.receive_output(1)  # response body
@@ -271,13 +289,15 @@ async def test_handler_basic():
     assert body_stream.read() == b""
 
 
+@pytest.mark.django_db
 @pytest.mark.asyncio
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
 async def test_handler_body_single():
     """
     Tests request handling with a single-part body
     """
     scope = {"type": "http", "http_version": "1.1", "method": "GET", "path": "/test/"}
-    handler = ApplicationCommunicator(MockHandler, scope)
+    handler = ApplicationCommunicator(MockHandler(), scope)
     await handler.send_input(
         {"type": "http.request", "body": b"chunk one \x01 chunk two"}
     )
@@ -288,13 +308,15 @@ async def test_handler_body_single():
     assert body_stream.read() == b"chunk one \x01 chunk two"
 
 
+@pytest.mark.django_db
 @pytest.mark.asyncio
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
 async def test_handler_body_multiple():
     """
     Tests request handling with a multi-part body
     """
     scope = {"type": "http", "http_version": "1.1", "method": "GET", "path": "/test/"}
-    handler = ApplicationCommunicator(MockHandler, scope)
+    handler = ApplicationCommunicator(MockHandler(), scope)
     await handler.send_input(
         {"type": "http.request", "body": b"chunk one", "more_body": True}
     )
@@ -309,13 +331,15 @@ async def test_handler_body_multiple():
     assert body_stream.read() == b"chunk one \x01 chunk two"
 
 
+@pytest.mark.django_db
 @pytest.mark.asyncio
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
 async def test_handler_body_ignore_extra():
     """
     Tests request handling ignores anything after more_body: False
     """
     scope = {"type": "http", "http_version": "1.1", "method": "GET", "path": "/test/"}
-    handler = ApplicationCommunicator(MockHandler, scope)
+    handler = ApplicationCommunicator(MockHandler(), scope)
     await handler.send_input(
         {"type": "http.request", "body": b"chunk one", "more_body": False}
     )
@@ -325,6 +349,35 @@ async def test_handler_body_ignore_extra():
     scope, body_stream = MockHandler.request_class.call_args[0]
     body_stream.seek(0)
     assert body_stream.read() == b"chunk one"
+
+
+@pytest.mark.django_db
+@pytest.mark.asyncio
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
+async def test_handler_concurrent_requests():
+    """
+    Tests request handling ignores anything after more_body: False
+    """
+    scope = {"type": "http", "http_version": "1.1", "method": "GET", "path": "/test/"}
+    handler = MockHandler()
+    comm_1 = ApplicationCommunicator(handler, {**scope})
+    comm_2 = ApplicationCommunicator(handler, {**scope})
+
+    request_1 = comm_1.send_input(
+        {"type": "http.request", "body": b"request 1", "more_body": False}
+    )
+    request_2 = comm_2.send_input(
+        {"type": "http.request", "body": b"request 2", "more_body": False}
+    )
+
+    await request_1
+    await request_2
+
+    await comm_1.receive_output(1)  # response start
+    await comm_1.receive_output(1)  # response body
+
+    await comm_2.receive_output(1)  # response start
+    await comm_2.receive_output(1)  # response body
 
 
 @pytest.mark.django_db(transaction=True)
@@ -344,9 +397,9 @@ async def test_sessions():
             )
             await self.send({"type": "http.response.body", "body": b"test response"})
 
-    communicator = HttpCommunicator(
-        SessionMiddlewareStack(SimpleHttpApp), "GET", "/test/"
-    )
+    app = SimpleHttpApp()
+
+    communicator = HttpCommunicator(SessionMiddlewareStack(app), "GET", "/test/")
     response = await communicator.get_response()
     headers = response.get("headers", [])
 
@@ -367,26 +420,53 @@ async def test_sessions():
     assert re.compile(r"Path").search(value) is not None
 
 
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_muliple_sessions():
+    """
+    Create two application instances and test then out of order to verify that
+    separate scopes are used.
+    """
+
+    async def inner(scope, receive, send):
+        send(scope["path"])
+
+    class SimpleHttpApp(AsyncConsumer):
+        async def http_request(self, event):
+            await database_sync_to_async(self.scope["session"].save)()
+            assert self.scope["method"] == "GET"
+            await self.send(
+                {"type": "http.response.start", "status": 200, "headers": []}
+            )
+            await self.send(
+                {"type": "http.response.body", "body": self.scope["path"].encode()}
+            )
+
+    app = SessionMiddlewareStack(SimpleHttpApp.as_asgi())
+
+    first_communicator = HttpCommunicator(app, "GET", "/first/")
+    second_communicator = HttpCommunicator(app, "GET", "/second/")
+
+    second_response = await second_communicator.get_response()
+    assert second_response["body"] == b"/second/"
+
+    first_response = await first_communicator.get_response()
+    assert first_response["body"] == b"/first/"
+
+
 class MiddlewareTests(unittest.TestCase):
+    @pytest.mark.filterwarnings("ignore::DeprecationWarning")
     def test_middleware_caching(self):
         """
         Tests that middleware is only loaded once
         and is successfully cached on the AsgiHandler class.
         """
-
-        scope = {
-            "type": "http",
-            "http_version": "1.1",
-            "method": "GET",
-            "path": "/test/",
-        }
-
-        AsgiHandler(scope)  # First Handler
+        AsgiHandler()  # First Handler
 
         self.assertTrue(AsgiHandler._middleware_chain is not None)
 
         with patch(
             "django.core.handlers.base.BaseHandler.load_middleware"
         ) as super_function:
-            AsgiHandler(scope)  # Second Handler
+            AsgiHandler()  # Second Handler
             self.assertFalse(super_function.called)

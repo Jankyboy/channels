@@ -11,11 +11,11 @@ setup(
     license='BSD',
     packages=find_packages(exclude=['tests']),
     include_package_data=True,
-    python_requires='>=3.5',
+    python_requires='>=3.6',
     install_requires=[
         'Django>=2.2',
-        'asgiref~=3.2',
-        'daphne~=2.3',
+        'asgiref>=3.2.10,<4',
+        'daphne>=3.0,<4',
     ],
     extras_require={
         'tests': [
@@ -30,16 +30,16 @@ setup(
     classifiers=[
         'Development Status :: 5 - Production/Stable',
         'Environment :: Web Environment',
-        'Framework :: Django',
         'Intended Audience :: Developers',
         'License :: OSI Approved :: BSD License',
         'Operating System :: OS Independent',
         'Programming Language :: Python',
         'Programming Language :: Python :: 3',
-        'Programming Language :: Python :: 3.5',
         'Programming Language :: Python :: 3.6',
         'Programming Language :: Python :: 3.7',
         'Programming Language :: Python :: 3.8',
+        'Programming Language :: Python :: 3.9',
+        'Framework :: Django',
         'Topic :: Internet :: WWW/HTTP',
     ],
 )

@@ -2,6 +2,7 @@ from importlib import import_module
 from unittest import mock
 
 import pytest
+from asgiref.sync import sync_to_async
 from django.conf import settings
 from django.contrib.auth import (
     BACKEND_SESSION_KEY,
@@ -13,10 +14,8 @@ from django.contrib.auth import (
 )
 from django.contrib.auth.models import AnonymousUser
 
-from asgiref.sync import sync_to_async
-from channels.auth import AuthMiddleware, get_user, login, logout
+from channels.auth import get_user, login, logout
 from channels.db import database_sync_to_async
-from channels.generic.websocket import WebsocketConsumer
 
 
 class CatchSignal:
@@ -77,7 +76,8 @@ def session():
 
 async def assert_is_logged_in(scope, user):
     """
-    Assert that the provided user is logged in to the session contained within the scope.
+    Assert that the provided user is logged in to the session contained within
+    the scope.
     """
     assert "user" in scope
     assert scope["user"] == user
@@ -98,13 +98,15 @@ async def assert_is_logged_in(scope, user):
 @pytest.mark.asyncio
 async def test_login_no_session_in_scope():
     """
-    Test to ensure that a `ValueError` is raised if when tying to login a user to a scope that has no session.
+    Test to ensure that a `ValueError` is raised if when tying to login a user
+    to a scope that has no session.
     """
 
-    with pytest.raises(
-        ValueError,
-        match="Cannot find session in scope. You should wrap your consumer in SessionMiddleware.",
-    ):
+    msg = (
+        "Cannot find session in scope. You should wrap your consumer in "
+        "SessionMiddleware."
+    )
+    with pytest.raises(ValueError, match=msg):
         await login(scope={}, user=None)
 
 
@@ -112,7 +114,8 @@ async def test_login_no_session_in_scope():
 @pytest.mark.asyncio
 async def test_login_no_user_in_scope(session):
     """
-    Test the login method to ensure it raises a `ValueError` if no user is passed and is no user in the scope.
+    Test the login method to ensure it raises a `ValueError` if no user is
+    passed and is no user in the scope.
     """
     scope = {"session": session}
 
@@ -127,8 +130,8 @@ async def test_login_no_user_in_scope(session):
 @pytest.mark.asyncio
 async def test_login_user_as_argument(session, user_bob):
     """
-    Test that one can login to a scope that has a session by passing the scope and user as arguments to the login
-     function.
+    Test that one can login to a scope that has a session by passing the scope
+    and user as arguments to the login function.
     """
     scope = {"session": session}
 
@@ -148,8 +151,8 @@ async def test_login_user_as_argument(session, user_bob):
 @pytest.mark.asyncio
 async def test_login_user_on_scope(session, user_bob):
     """
-    Test that in the absence of a user being passed to the `login` function the function will use the user set on the
-     scope.
+    Test that in the absence of a user being passed to the `login` function the
+    function will use the user set on the scope.
     """
     scope = {"session": session, "user": user_bob}
 
@@ -232,7 +235,8 @@ async def test_logout(session, user_bob):
 @pytest.mark.asyncio
 async def test_logout_not_logged_in(session):
     """
-    Test that the `logout` function does nothing in the case were there is no user logged in.
+    Test that the `logout` function does nothing in the case were there is no
+    user logged in.
     """
     scope = {"session": session}
 
@@ -246,23 +250,3 @@ async def test_logout_not_logged_in(session):
 
     assert "user" not in scope
     assert isinstance(await get_user(scope), AnonymousUser)
-
-
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.asyncio
-async def test_scope_user_error_message(session):
-    """
-    Tests that the correct error message is thrown when scope user is accessed before it's ready
-    """
-
-    class TestConsumer(WebsocketConsumer):
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, **kwargs)
-            if "user" in self.scope:
-                # access scope user before it's ready
-                getattr(self.scope["user"], "test")
-
-    with pytest.raises(ValueError, match="Accessing scope user before it is ready."):
-        scope = {"session": session}
-        auth = AuthMiddleware(TestConsumer)
-        auth(scope)

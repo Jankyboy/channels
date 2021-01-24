@@ -2,7 +2,7 @@ import asyncio
 from urllib.parse import unquote
 
 import pytest
-from django.conf.urls import url
+from django.urls import path
 
 from channels.consumer import AsyncConsumer
 from channels.generic.websocket import WebsocketConsumer
@@ -28,7 +28,7 @@ async def test_http_communicator():
     """
     Tests that the HTTP communicator class works at a basic level.
     """
-    communicator = HttpCommunicator(SimpleHttpApp, "GET", "/test/?foo=bar")
+    communicator = HttpCommunicator(SimpleHttpApp(), "GET", "/test/?foo=bar")
     response = await communicator.get_response()
     assert response["body"] == b"test response"
     assert response["status"] == 200
@@ -66,12 +66,13 @@ class KwargsWebSocketApp(WebsocketConsumer):
         self.send(text_data=self.scope["url_route"]["kwargs"]["message"])
 
 
+@pytest.mark.django_db
 @pytest.mark.asyncio
 async def test_websocket_communicator():
     """
     Tests that the WebSocket communicator class works at a basic level.
     """
-    communicator = WebsocketCommunicator(SimpleWebsocketApp, "/testws/")
+    communicator = WebsocketCommunicator(SimpleWebsocketApp(), "/testws/")
     # Test connection
     connected, subprotocol = await communicator.connect()
     assert connected
@@ -92,13 +93,14 @@ async def test_websocket_communicator():
     await communicator.disconnect()
 
 
+@pytest.mark.django_db
 @pytest.mark.asyncio
 async def test_websocket_application():
     """
     Tests that the WebSocket communicator class works with the
     URLRoute application.
     """
-    application = URLRouter([url(r"^testws/(?P<message>\w+)/$", KwargsWebSocketApp)])
+    application = URLRouter([path("testws/<str:message>/", KwargsWebSocketApp())])
     communicator = WebsocketCommunicator(application, "/testws/test/")
     connected, subprotocol = await communicator.connect()
     # Test connection
@@ -109,12 +111,13 @@ async def test_websocket_application():
     await communicator.disconnect()
 
 
+@pytest.mark.django_db
 @pytest.mark.asyncio
 async def test_timeout_disconnect():
     """
     Tests that disconnect() still works after a timeout.
     """
-    communicator = WebsocketCommunicator(ErrorWebsocketApp, "/testws/")
+    communicator = WebsocketCommunicator(ErrorWebsocketApp(), "/testws/")
     # Test connection
     connected, subprotocol = await communicator.connect()
     assert connected
@@ -146,17 +149,21 @@ class ConnectionScopeValidator(WebsocketConsumer):
 paths = [
     "user:pass@example.com:8080/p/a/t/h?query=string#hash",
     "wss://user:pass@example.com:8080/p/a/t/h?query=string#hash",
-    "ws://www.example.com/%E9%A6%96%E9%A1%B5/index.php?foo=%E9%A6%96%E9%A1%B5&spam=eggs",
+    (
+        "ws://www.example.com/%E9%A6%96%E9%A1%B5/index.php?"
+        "foo=%E9%A6%96%E9%A1%B5&spam=eggs"
+    ),
 ]
 
 
+@pytest.mark.django_db
 @pytest.mark.asyncio
 @pytest.mark.parametrize("path", paths)
 async def test_connection_scope(path):
     """
     Tests ASGI specification for the the connection scope.
     """
-    communicator = WebsocketCommunicator(ConnectionScopeValidator, path)
+    communicator = WebsocketCommunicator(ConnectionScopeValidator(), path)
     connected, _ = await communicator.connect()
     assert connected
     await communicator.disconnect()

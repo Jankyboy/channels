@@ -12,7 +12,6 @@ from django.contrib.auth import (
 from django.contrib.auth.models import AnonymousUser
 from django.utils.crypto import constant_time_compare
 from django.utils.functional import LazyObject
-from django.utils.translation import LANGUAGE_SESSION_KEY
 
 from channels.db import database_sync_to_async
 from channels.middleware import BaseMiddleware
@@ -27,7 +26,8 @@ def get_user(scope):
     """
     if "session" not in scope:
         raise ValueError(
-            "Cannot find session in scope. You should wrap your consumer in SessionMiddleware."
+            "Cannot find session in scope. You should wrap your consumer in "
+            "SessionMiddleware."
         )
     session = scope["session"]
     user = None
@@ -61,7 +61,8 @@ def login(scope, user, backend=None):
     """
     if "session" not in scope:
         raise ValueError(
-            "Cannot find session in scope. You should wrap your consumer in SessionMiddleware."
+            "Cannot find session in scope. You should wrap your consumer in "
+            "SessionMiddleware."
         )
     session = scope["session"]
     session_auth_hash = ""
@@ -94,7 +95,8 @@ def login(scope, user, backend=None):
             _, backend = backends[0]
         else:
             raise ValueError(
-                "You have multiple authentication backends configured and therefore must provide the `backend` "
+                "You have multiple authentication backends configured and "
+                "therefore must provide the `backend` "
                 "argument or set the `backend` attribute on the user."
             )
     session[SESSION_KEY] = user._meta.pk.value_to_string(user)
@@ -112,7 +114,8 @@ def logout(scope):
     """
     if "session" not in scope:
         raise ValueError(
-            "Login cannot find session in scope. You should wrap your consumer in SessionMiddleware."
+            "Login cannot find session in scope. You should wrap your "
+            "consumer in SessionMiddleware."
         )
     session = scope["session"]
     # Dispatch the signal before the user is logged out so the receivers have a
@@ -122,11 +125,7 @@ def logout(scope):
         user = None
     if user is not None:
         user_logged_out.send(sender=user.__class__, request=None, user=user)
-    # remember language choice saved to session
-    language = session.get(LANGUAGE_SESSION_KEY)
     session.flush()
-    if language is not None:
-        session[LANGUAGE_SESSION_KEY] = language
     if "user" in scope:
         scope["user"] = AnonymousUser()
 
@@ -139,7 +138,8 @@ def _get_user_session_key(session):
 
 class UserLazyObject(LazyObject):
     """
-    Throw a more useful error message when scope['user'] is accessed before it's resolved
+    Throw a more useful error message when scope['user'] is accessed before
+    it's resolved
     """
 
     def _setup(self):
@@ -156,7 +156,8 @@ class AuthMiddleware(BaseMiddleware):
         # Make sure we have a session
         if "session" not in scope:
             raise ValueError(
-                "AuthMiddleware cannot find session in scope. SessionMiddleware must be above it."
+                "AuthMiddleware cannot find session in scope. "
+                "SessionMiddleware must be above it."
             )
         # Add it to the scope if it's not there already
         if "user" not in scope:
@@ -165,8 +166,16 @@ class AuthMiddleware(BaseMiddleware):
     async def resolve_scope(self, scope):
         scope["user"]._wrapped = await get_user(scope)
 
+    async def __call__(self, scope, receive, send):
+        scope = dict(scope)
+        # Scope injection/mutation per this middleware's needs.
+        self.populate_scope(scope)
+        # Grab the finalized/resolved scope
+        await self.resolve_scope(scope)
+
+        return await super().__call__(scope, receive, send)
+
 
 # Handy shortcut for applying all three layers at once
-AuthMiddlewareStack = lambda inner: CookieMiddleware(
-    SessionMiddleware(AuthMiddleware(inner))
-)
+def AuthMiddlewareStack(inner):
+    return CookieMiddleware(SessionMiddleware(AuthMiddleware(inner)))

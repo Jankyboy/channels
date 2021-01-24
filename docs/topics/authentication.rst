@@ -19,11 +19,11 @@ requires ``CookieMiddleware``. For convenience, these are also provided
 as a combined callable called ``AuthMiddlewareStack`` that includes all three.
 
 To use the middleware, wrap it around the appropriate level of consumer
-in your ``routing.py``:
+in your ``asgi.py``:
 
 .. code-block:: python
 
-    from django.conf.urls import url
+    from django.urls import re_path
 
     from channels.routing import ProtocolTypeRouter, URLRouter
     from channels.auth import AuthMiddlewareStack
@@ -34,7 +34,7 @@ in your ``routing.py``:
 
         "websocket": AuthMiddlewareStack(
             URLRouter([
-                url(r"^front(end)/$", consumers.AsyncChatConsumer),
+                re_path(r"^front(end)/$", consumers.AsyncChatConsumer.as_asgi()),
             ])
         ),
 
@@ -74,36 +74,31 @@ query string and uses that:
 
 .. code-block:: python
 
-    from django.db import close_old_connections
+    from channels.db import database_sync_to_async
+
+    @database_sync_to_async
+    def get_user(user_id):
+        try:
+            return User.objects.get(id=user_id)
+        except User.DoesNotExist:
+            return AnonymousUser()
 
     class QueryAuthMiddleware:
         """
         Custom middleware (insecure) that takes user IDs from the query string.
         """
 
-        def __init__(self, inner):
+        def __init__(self, app):
             # Store the ASGI application we were passed
-            self.inner = inner
+            self.app = app
 
-        def __call__(self, scope):
-
-            # Close old database connections to prevent usage of timed out connections
-            close_old_connections()
-
+        async def __call__(self, scope, receive, send):
             # Look up user from query string (you should also do things like
             # checking if it is a valid user ID, or if scope["user"] is already
             # populated).
-            user = User.objects.get(id=int(scope["query_string"]))
+            scope['user'] = await get_user(int(scope["query_string"]))
 
-            # Return the inner application directly and let it run everything else
-            return self.inner(dict(scope, user=user))
-
-.. warning::
-
-    Right now you will need to call ``close_old_connections()`` before any
-    database code you call inside a middleware's scope-setup method to ensure
-    you don't leak idle database connections. We hope to call this automatically
-    in future versions of Channels.
+            return await self.app(scope, receive, send)
 
 The same principles can be applied to authenticate over non-HTTP protocols;
 for example, you might want to use someone's chat username from a chat protocol
